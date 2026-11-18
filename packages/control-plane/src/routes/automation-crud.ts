@@ -393,6 +393,7 @@ async function handleCreateAutomation(
     next_run_at: nextRunAt,
     consecutive_failures: 0,
     max_retries: body.maxRetries ?? 0,
+    sandbox_timeout_ms: body.sandboxTimeoutMs ?? null,
     created_by: enforced.participantUserId,
     user_id: resolvedUserId,
     created_at: now,
@@ -667,6 +668,11 @@ async function handleUpdateAutomation(
   // children and finish; the new bound applies from the next admission.
   if (body.maxConcurrentRuns !== undefined) {
     updateFields.max_concurrent_runs = body.maxConcurrentRuns;
+  }
+  // Runs already launched keep the budget their session was created with; null
+  // clears the override back to inheriting.
+  if (body.sandboxTimeoutMs !== undefined) {
+    updateFields.sandbox_timeout_ms = body.sandboxTimeoutMs;
   }
 
   // Repository-set edits are UNCONDITIONAL — no cardinality freeze and no
