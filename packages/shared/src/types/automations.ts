@@ -13,6 +13,7 @@ import {
 import type { RepositoryInput, RepositoryRef } from "./repositories";
 import { modelProviderSelectionsSchema } from "./provider-accounts";
 import { isEnvironmentId } from "./environments";
+import { isValidSandboxTimeoutMs } from "./integrations";
 import { isCanonicalUserId } from "../user-id";
 
 /**
@@ -95,6 +96,30 @@ export const automationMaxConcurrentRunsSchema = z
   .max(MAX_AUTOMATION_CONCURRENT_RUNS);
 
 /**
+ * Shortest time budget an automation may override its runs to. Above
+ * DEFAULT_FINAL_SNAPSHOT_BUFFER_MS, so a sandbox timeout accepted here still
+ * leaves the default final-snapshot buffer room before expiry.
+ */
+export const MIN_AUTOMATION_SANDBOX_TIMEOUT_MS = 15 * 60 * 1000;
+
+/** Longest time budget an automation may override its runs to. */
+export const MAX_AUTOMATION_SANDBOX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Per-automation sandbox timeout, in milliseconds, replacing the timeout its
+ * runs would otherwise inherit from their repository, environment, or the
+ * deployment. A whole number of seconds within the automation bounds.
+ */
+export const automationSandboxTimeoutMsSchema = z
+  .number()
+  .refine(isValidSandboxTimeoutMs, "sandboxTimeoutMs must be a whole number of seconds")
+  .refine(
+    (value) =>
+      value >= MIN_AUTOMATION_SANDBOX_TIMEOUT_MS && value <= MAX_AUTOMATION_SANDBOX_TIMEOUT_MS,
+    `sandboxTimeoutMs must be between ${MIN_AUTOMATION_SANDBOX_TIMEOUT_MS} and ${MAX_AUTOMATION_SANDBOX_TIMEOUT_MS}`
+  );
+
+/**
  * Validate target-count rules shared by automation clients and the API.
  * Repository-scoped triggers bind to exactly one repository and no
  * environments; fan-out is schedule-only; both target kinds share one cap.
@@ -170,6 +195,11 @@ const automationSchema = z.object({
   reasoningEffort: z.string().nullable(),
   enabled: z.boolean(),
   maxConcurrentRuns: z.number(),
+  /**
+   * Sandbox timeout override for this automation's runs; null inherits. Defaulted so a web
+   * build that deploys before its control plane still parses responses.
+   */
+  sandboxTimeoutMs: z.number().nullable().default(null),
   nextRunAt: z.number().nullable(),
   consecutiveFailures: z.number(),
   /**
@@ -268,6 +298,8 @@ export const createAutomationRequestSchema = z.object({
   sentryClientSecret: sentryClientSecretSchema.optional(),
   /** Firings allowed in flight at once. Omission means DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS. */
   maxConcurrentRuns: automationMaxConcurrentRunsSchema.optional(),
+  /** Sandbox timeout override for this automation's runs. Null or omission inherits. */
+  sandboxTimeoutMs: automationSandboxTimeoutMsSchema.nullable().optional(),
   /** Repositories to run against (0..MAX_AUTOMATION_REPOSITORIES). */
   repositories: automationRepositoriesInputSchema.optional(),
   /** Environments to fan out over, one workspace session each (design §13.3). */
@@ -295,6 +327,8 @@ export const updateAutomationRequestSchema = z.object({
   triggerConfig: triggerConfigSchema.nullable().optional(),
   /** Firings allowed in flight at once. */
   maxConcurrentRuns: automationMaxConcurrentRunsSchema.optional(),
+  /** Sandbox timeout override; null clears it back to inheriting, omission keeps it. */
+  sandboxTimeoutMs: automationSandboxTimeoutMsSchema.nullable().optional(),
   /** Replaces the full repository selection when present. */
   repositories: automationRepositoriesInputSchema.optional(),
   /** Replaces the full environment selection when present (empty clears). */
