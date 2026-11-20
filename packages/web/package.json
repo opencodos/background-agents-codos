@@ -47,7 +47,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
-    "react-resizable-panels": "^4.21.0",
+    "react-resizable-panels": "^4.22.0",
     "recharts": "^3.10.1",
     "rehype-highlight": "^7.0.2",
     "rehype-sanitize": "^6.0.0",
@@ -60,22 +60,22 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@opennextjs/cloudflare": "1.20.16",
+    "@opennextjs/cloudflare": "1.20.17",
     "@tailwindcss/postcss": "^4.3.5",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
-    "@testing-library/user-event": "^14.6.9",
+    "@testing-library/user-event": "^14.6.10",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.6",
     "@types/react-dom": "^19.0.3",
     "@vitest/coverage-v8": "^5.1.0",
     "esbuild": "^0.28.2",
-    "jsdom": "^31.0.0",
+    "jsdom": "^31.0.1",
     "postcss": "^8.5.30",
     "tailwindcss": "^4.3.5",
     "typescript": "^5.7.2",
     "vitest": "^5.1.0",
-    "wrangler": "^4.160.0"
+    "wrangler": "^4.161.0"
   },
   "engines": {
     "node": ">=24.0.0"
