@@ -832,6 +832,21 @@ describe("getReviewStatusState", () => {
     });
   });
 
+  it("does not treat a 403 on the status read whose body cannot be read as permanent", async () => {
+    const response = new Response(null, {
+      status: 403,
+      headers: { "x-ratelimit-remaining": "4999" },
+    });
+    vi.spyOn(response, "text").mockRejectedValue(new Error("stream reset"));
+    vi.mocked(globalThis.fetch).mockResolvedValue(response);
+
+    await expect(getReviewStatusState("test-token", "acme", "widgets", "abc123")).resolves.toEqual({
+      ok: false,
+      permanent: false,
+      error: "GitHub API returned 403",
+    });
+  });
+
   it("reports a non-2xx response as unreadable", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 404 }));
 
