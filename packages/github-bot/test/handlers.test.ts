@@ -1752,7 +1752,10 @@ describe("handlePullRequestReviewTrigger", () => {
       }
       if (url === "https://internal/sessions") {
         return Promise.resolve(
-          new Response(JSON.stringify({ error: "review generation superseded" }), { status: 409 })
+          new Response(
+            JSON.stringify({ error: "review generation superseded", code: "review_superseded" }),
+            { status: 409 }
+          )
         );
       }
       return Promise.resolve(new Response("Not found", { status: 404 }));
@@ -1995,6 +1998,31 @@ describe("handleReviewRequested", () => {
     expect(
       await handleReviewRequested(env, createMockLogger(), reviewRequestedPayload, "trace-refused")
     ).toEqual({ outcome: "skipped", skip_reason: "team_archived" });
+    expect(
+      controlPlaneBodies(
+        getControlPlaneFetch(env),
+        "https://internal/internal/github-reviews/release-claim"
+      )
+    ).toEqual([{ repoId: 99, prNumber: 42, generation: 1 }]);
+  });
+
+  it("rolls back its claim when session create returns a 409 without the superseded code", async () => {
+    // A harness refusal is a code-less 409. Reading it as superseded would keep the claim and
+    // fence out the review still running on the previous generation.
+    const env = createMockEnv();
+    mockControlPlaneResponse(env, /^https:\/\/internal\/sessions$/, () =>
+      Response.json({ error: "No qualified model is enabled" }, { status: 409 })
+    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 201 })));
+
+    const result = await handleReviewRequested(
+      env,
+      createMockLogger(),
+      reviewRequestedPayload,
+      "trace-harness-refused"
+    ).catch((err: unknown) => err);
+
+    expect(result).not.toEqual({ outcome: "skipped", skip_reason: "superseded" });
     expect(
       controlPlaneBodies(
         getControlPlaneFetch(env),

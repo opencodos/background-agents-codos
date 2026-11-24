@@ -237,6 +237,12 @@ const REAPER_UNPROMPTED_BATCH = 10;
 const CLOSE_OUT_DRIVE_TIMEOUT_MS = 10_000;
 
 /**
+ * Timeout for one cancel request to a stale review session or a descendant. A timed-out cancel
+ * throws, so its row is retained for the next sweep or reaper pass, like any other failed cancel.
+ */
+const REVIEW_SESSION_CANCEL_TIMEOUT_MS = 10_000;
+
+/**
  * Recorded as the close-out description of a review whose prompt never
  * reached its session. Matches the github-bot's REVIEW_START_FAILED_DESCRIPTION.
  */
@@ -485,6 +491,7 @@ async function cancelStaleReviewSession(
   }
   const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.cancel, {
     method: "POST",
+    signal: AbortSignal.timeout(REVIEW_SESSION_CANCEL_TIMEOUT_MS),
   });
   if (response.status === 404) {
     const ageMs = Date.now() - row.created_at;
@@ -511,7 +518,7 @@ async function cancelStaleReviewSession(
     const descendantResponse = await ctx.sessionRuntime.fetch(
       descendantId,
       SessionInternalPaths.cancel,
-      { method: "POST" }
+      { method: "POST", signal: AbortSignal.timeout(REVIEW_SESSION_CANCEL_TIMEOUT_MS) }
     );
     // 409 means the descendant reached a terminal state since the D1 query.
     if (!descendantResponse.ok && descendantResponse.status !== 409) {

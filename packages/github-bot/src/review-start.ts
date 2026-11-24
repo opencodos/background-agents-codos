@@ -10,7 +10,10 @@
  * 5. sendReviewPrompt — deliver the prompt with the review's status target as callback context.
  */
 
-import type { GitHubReviewCallbackContext } from "@open-inspect/shared/types/session-api";
+import {
+  REVIEW_SUPERSEDED_CODE,
+  type GitHubReviewCallbackContext,
+} from "@open-inspect/shared/types/session-api";
 import {
   getPullRequestApproval,
   getPullRequestSnapshot,
@@ -180,8 +183,8 @@ export async function admitReview(review: ReviewContext): Promise<HandlerResult 
 
 /**
  * Settle the claim of a review whose session was not created: `creation` is the refused creation,
- * or absent when creation threw. A 409 without a refusal code means a newer trigger claimed the
- * PR's generation first, so its claim must stand and the review is skipped. After any other
+ * or absent when creation threw. A 409 with the `review_superseded` code means a newer trigger
+ * claimed the PR's generation first, so its claim must stand and the review is skipped. After any other
  * failure the claim bumped the fence but no session will ever carry it: it is rolled back so a
  * review still running on the previous generation is not permanently locked out of submitting,
  * and null leaves the failure to the caller.
@@ -191,7 +194,7 @@ export async function abandonReview(
   creation?: Extract<SessionCreationResult, { ok: false }>
 ): Promise<HandlerResult | null> {
   const { env, log, traceId, meta, githubReview } = review;
-  if (creation?.status === 409 && creation.code === undefined) {
+  if (creation?.status === 409 && creation.code === REVIEW_SUPERSEDED_CODE) {
     log.info("handler.review_superseded", { ...meta, generation: githubReview.generation });
     return { outcome: "skipped", skip_reason: "superseded" };
   }

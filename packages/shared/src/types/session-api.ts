@@ -142,6 +142,12 @@ export type AutomationCallbackContext = z.infer<typeof automationCallbackContext
  * Attached by the github-bot to a review prompt so the review's end — however it ends — comes
  * back to the bot that wrote its "pending" commit status. It names the commit that status sits on.
  */
+/**
+ * Error code on the 409 a GitHub-review session create returns when a newer review claimed the
+ * PR first. Other 409s from session create (a harness refusal, for example) carry other codes.
+ */
+export const REVIEW_SUPERSEDED_CODE = "review_superseded";
+
 export const githubReviewCallbackContextSchema = z.strictObject({
   source: z.literal("github"),
   owner: nonEmptyStringSchema,

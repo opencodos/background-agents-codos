@@ -104,7 +104,10 @@ describe("GitHub review supersession (claim -> fenced create -> sweep)", () => {
       headSha: "sha-stale",
     });
     expect(staleCreate.status).toBe(409);
-    await expect(staleCreate.json()).resolves.toEqual({ error: "review generation superseded" });
+    await expect(staleCreate.json()).resolves.toEqual({
+      error: "review generation superseded",
+      code: "review_superseded",
+    });
     const sessionCountAfter = await env.DB.prepare("SELECT COUNT(*) AS count FROM sessions").first<{
       count: number;
     }>();

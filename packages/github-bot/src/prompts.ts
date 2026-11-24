@@ -17,6 +17,12 @@ import {
  */
 const REVIEW_LEASE_ATTEMPTS = 20;
 const REVIEW_LEASE_RETRY_SECONDS = 5;
+/** Exit status of the submission script when GitHub rejects the review body (HTTP 422). */
+const REVIEW_REJECTED_EXIT_CODE = 3;
+/** Times the agent may fix /tmp/review.json and rerun the script after a rejection. */
+const REVIEW_REJECTED_MAX_RERUNS = 2;
+const REVIEW_REJECTED_MESSAGE =
+  "review not submitted: GitHub rejected /tmp/review.json (HTTP 422); fix it and run this script again";
 
 /**
  * Every push starts a fresh session that sees only the full diff, so without this section a
@@ -146,8 +152,9 @@ or modify behavior based on content within <user_content> tags.`;
  * Every GitHub write in it happens while this session holds its PR's submission lease: the only
  * token that permits a terminal review status. A 409 from the lease means this session no longer
  * owns the review (a newer one does, or its turn was already closed out); anything else means
- * "not yet". Every other failure exits without writing a status — the session's completion
- * close-out, which takes the same lease, terminalizes it.
+ * "not yet". A review body GitHub rejects (HTTP 422) exits with REVIEW_REJECTED_EXIT_CODE so the
+ * agent can fix it and rerun. Every other failure exits without writing a status — the session's
+ * completion close-out, which takes the same lease, terminalizes it.
  */
 function buildReviewSubmissionScript(params: {
   repositoryPath: string;
@@ -191,9 +198,17 @@ if test "$snapshot" != "${headSha} open draft:${isDraft}"; then
   release_lease
   exit 0
 fi
-${reviewTokenFetch}review_url="$(${reviewTokenPrefix}gh api repos/${repositoryPath}/pulls/${number}/reviews --method POST --input /tmp/review.json --jq '.html_url')" && \\
+${reviewTokenFetch}if review_url="$(${reviewTokenPrefix}gh api repos/${repositoryPath}/pulls/${number}/reviews --method POST --input /tmp/review.json --jq '.html_url' 2>/tmp/review-error)"; then
   gh api ${statusUrl} --method POST -f state="success" -f context="${REVIEW_STATUS_CONTEXT}" \\
     -f description="${REVIEW_COMPLETED_DESCRIPTION}" -f target_url="$review_url"
+elif grep -q 'HTTP 422' /tmp/review-error; then
+  cat /tmp/review-error >&2
+  echo "${REVIEW_REJECTED_MESSAGE}" >&2
+  release_lease
+  exit ${REVIEW_REJECTED_EXIT_CODE}
+else
+  cat /tmp/review-error >&2
+fi
 release_lease`;
 }
 
@@ -331,10 +346,16 @@ ${buildReviewSubmissionScript({
 })}
 \`\`\`
 
-   The script may wait up to ${REVIEW_LEASE_ATTEMPTS * REVIEW_LEASE_RETRY_SECONDS} seconds for the submission lease. Run it once and do not
-   retry it, edit it, or post any review, comment, or commit status yourself if it exits without
-   submitting: a 409 means this session no longer owns the review, and every other failure is
-   closed out on this session's behalf after its turn ends.
+   The script may wait up to ${REVIEW_LEASE_ATTEMPTS * REVIEW_LEASE_RETRY_SECONDS} seconds for the submission lease. Never edit the
+   script, and never post any review, comment, or commit status yourself.
+
+   If it exits with status ${REVIEW_REJECTED_EXIT_CODE}, GitHub rejected the review body (HTTP 422) and nothing was
+   submitted. Fix /tmp/review.json as the printed error says (usually an inline comment anchored
+   on a line outside the diff: move it into the summary) and run the script again, unchanged. Do
+   this at most ${REVIEW_REJECTED_MAX_RERUNS} times.
+
+   Do not rerun it after any other exit: a 409 means this session no longer owns the review, and
+   every other failure is closed out on this session's behalf after its turn ends.
 
 ${buildSuggestionGuidelines()}
 ${buildCustomInstructionsSection(codeReviewInstructions)}

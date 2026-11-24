@@ -63,16 +63,21 @@ export const SCHEDULED_JOBS: readonly ScheduledJob[] = [
       backgroundTasks.submit(() => checkAutofixQueueHealth(env, log), {
         name: "autofix_queue_health",
       });
-      // Retire review sessions a newer generation has superseded. Its failure
-      // must not cost the automation tick below its slot.
-      try {
-        await reapSupersededReviewSessions(db, sessions, env, backgroundTasks);
-      } catch (reaperError) {
-        log.warn("Review reaper tick failed", {
-          event: "review_reaper.tick_failed",
-          error: reaperError instanceof Error ? reaperError.message : String(reaperError),
-        });
-      }
+      // Retire review sessions a newer generation has superseded. It runs in the
+      // background so a slow session runtime cannot delay the automation tick below.
+      backgroundTasks.submit(
+        async () => {
+          try {
+            await reapSupersededReviewSessions(db, sessions, env, backgroundTasks);
+          } catch (reaperError) {
+            log.warn("Review reaper tick failed", {
+              event: "review_reaper.tick_failed",
+              error: reaperError instanceof Error ? reaperError.message : String(reaperError),
+            });
+          }
+        },
+        { name: "review_reaper" }
+      );
       // The tick runs both the recovery sweep (orphaned/timed-out runs) and
       // processes overdue automations.
       await createScheduler(db, env, backgroundTasks).tick();

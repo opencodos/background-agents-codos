@@ -372,6 +372,35 @@ describe("handleSweepStaleReviews", () => {
     expect(deletedSessionIds).toEqual([]);
   });
 
+  it("bounds every cancel with a timeout and keeps the row when one times out", async () => {
+    // A hung session runtime must not hold the sweep or the reaper: the cancel aborts, and the
+    // row stays for the next pass.
+    const { db, deletedSessionIds } = createFakeDb({ staleSessionIds: ["stale-hung"] });
+    const fetch = vi.fn<SessionRuntimeClient["fetch"]>(async () => {
+      throw new DOMException("The operation timed out.", "TimeoutError");
+    });
+
+    const response = await handleSweepStaleReviews(
+      jsonRequest("https://test.local/internal/github-reviews/sweep", {
+        repoId: 1,
+        prNumber: 2,
+        generation: 3,
+      }),
+      {} as Env,
+      NO_PARAMS,
+      sweepContext(db, fetch, GITHUB_BOT_PRINCIPAL)
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      cancelledSessionIds: [],
+      deferredSessionIds: [],
+      failedSessionIds: ["stale-hung"],
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]![2]?.signal).toBeInstanceOf(AbortSignal);
+    expect(deletedSessionIds).toEqual([]);
+  });
+
   it("keeps the row when a descendant cancel fails, but tolerates a 409 descendant", async () => {
     vi.spyOn(SessionIndexStore.prototype, "listActiveDescendantIds").mockImplementation(
       async (sessionId) => (sessionId === "with-bad-descendant" ? ["child-1"] : ["child-2"])

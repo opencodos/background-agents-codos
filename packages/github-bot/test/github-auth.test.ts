@@ -248,8 +248,76 @@ describe("postCommitStatus", () => {
     expect(result).toEqual({
       ok: false,
       status: 403,
+      permanent: true,
       error: "GitHub API returned 403",
     });
+  });
+
+  it("does not treat a rate-limited 403 as permanent", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ message: "API rate limit exceeded" }), {
+        status: 403,
+        headers: { "x-ratelimit-remaining": "0" },
+      })
+    );
+
+    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "pending",
+      context: "open-inspect",
+      description: "Review in progress",
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 403, permanent: false });
+  });
+
+  it("does not treat a secondary rate limit as permanent", async () => {
+    // A secondary limit can leave x-ratelimit-remaining above zero and set no retry-after; only
+    // its body says what it is.
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          message: "You have exceeded a secondary rate limit. Please wait a few minutes.",
+        }),
+        { status: 403, headers: { "x-ratelimit-remaining": "4999" } }
+      )
+    );
+
+    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "pending",
+      context: "open-inspect",
+      description: "Review in progress",
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 403, permanent: false });
+  });
+
+  it("does not treat a 403 whose body cannot be read as permanent", async () => {
+    const response = new Response(null, {
+      status: 403,
+      headers: { "x-ratelimit-remaining": "4999" },
+    });
+    vi.spyOn(response, "text").mockRejectedValue(new Error("stream reset"));
+    vi.mocked(globalThis.fetch).mockResolvedValue(response);
+
+    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "pending",
+      context: "open-inspect",
+      description: "Review in progress",
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 403, permanent: false });
+  });
+
+  it("does not treat a server error as permanent", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 502 }));
+
+    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "pending",
+      context: "open-inspect",
+      description: "Review in progress",
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 502, permanent: false });
   });
 
   it("returns the network error when the request fails", async () => {
@@ -263,6 +331,7 @@ describe("postCommitStatus", () => {
 
     expect(result).toEqual({
       ok: false,
+      permanent: false,
       error: "connection reset",
     });
   });
@@ -748,11 +817,42 @@ describe("getReviewStatusState", () => {
     );
   });
 
+  it("does not treat a secondary rate limit on the status read as permanent", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ message: "You have exceeded a secondary rate limit." }), {
+        status: 403,
+        headers: { "x-ratelimit-remaining": "4999" },
+      })
+    );
+
+    await expect(getReviewStatusState("test-token", "acme", "widgets", "abc123")).resolves.toEqual({
+      ok: false,
+      permanent: false,
+      error: "GitHub API returned 403",
+    });
+  });
+
+  it("does not treat a 403 on the status read whose body cannot be read as permanent", async () => {
+    const response = new Response(null, {
+      status: 403,
+      headers: { "x-ratelimit-remaining": "4999" },
+    });
+    vi.spyOn(response, "text").mockRejectedValue(new Error("stream reset"));
+    vi.mocked(globalThis.fetch).mockResolvedValue(response);
+
+    await expect(getReviewStatusState("test-token", "acme", "widgets", "abc123")).resolves.toEqual({
+      ok: false,
+      permanent: false,
+      error: "GitHub API returned 403",
+    });
+  });
+
   it("reports a non-2xx response as unreadable", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 404 }));
 
     await expect(getReviewStatusState("test-token", "acme", "widgets", "abc123")).resolves.toEqual({
       ok: false,
+      permanent: true,
       error: "GitHub API returned 404",
     });
   });
