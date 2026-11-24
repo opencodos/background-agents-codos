@@ -291,6 +291,23 @@ describe("postCommitStatus", () => {
     expect(result).toMatchObject({ ok: false, status: 403, permanent: false });
   });
 
+  it("does not treat a 403 whose body cannot be read as permanent", async () => {
+    const response = new Response(null, {
+      status: 403,
+      headers: { "x-ratelimit-remaining": "4999" },
+    });
+    vi.spyOn(response, "text").mockRejectedValue(new Error("stream reset"));
+    vi.mocked(globalThis.fetch).mockResolvedValue(response);
+
+    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "pending",
+      context: "open-inspect",
+      description: "Review in progress",
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 403, permanent: false });
+  });
+
   it("does not treat a server error as permanent", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 502 }));
 

@@ -80,8 +80,10 @@ export async function isPermanentGitHubRejection(response: Response): Promise<bo
   ) {
     return false;
   }
-  const body = await response.text().catch(() => "");
-  return !/rate limit|abuse/i.test(body);
+  // Only a body that was read and names no rate limit is evidence of a permission refusal: an
+  // unreadable one could be a secondary rate limit, so it stays retryable.
+  const body = await response.text().catch(() => null);
+  return body !== null && !/rate limit|abuse/i.test(body);
 }
 
 function base64UrlEncode(input: Uint8Array | string): string {
