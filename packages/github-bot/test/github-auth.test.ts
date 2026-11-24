@@ -248,8 +248,38 @@ describe("postCommitStatus", () => {
     expect(result).toEqual({
       ok: false,
       status: 403,
+      permanent: true,
       error: "GitHub API returned 403",
     });
+  });
+
+  it("does not treat a rate-limited 403 as permanent", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ message: "API rate limit exceeded" }), {
+        status: 403,
+        headers: { "x-ratelimit-remaining": "0" },
+      })
+    );
+
+    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "pending",
+      context: "open-inspect",
+      description: "Review in progress",
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 403, permanent: false });
+  });
+
+  it("does not treat a server error as permanent", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 502 }));
+
+    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "pending",
+      context: "open-inspect",
+      description: "Review in progress",
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 502, permanent: false });
   });
 
   it("returns the network error when the request fails", async () => {
@@ -263,6 +293,7 @@ describe("postCommitStatus", () => {
 
     expect(result).toEqual({
       ok: false,
+      permanent: false,
       error: "connection reset",
     });
   });
@@ -753,6 +784,7 @@ describe("getReviewStatusState", () => {
 
     await expect(getReviewStatusState("test-token", "acme", "widgets", "abc123")).resolves.toEqual({
       ok: false,
+      permanent: true,
       error: "GitHub API returned 404",
     });
   });

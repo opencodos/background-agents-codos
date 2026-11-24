@@ -230,7 +230,11 @@ describe("completeCloseOut", () => {
   });
 
   it("keeps the close-out for a retry when the current status cannot be read", async () => {
-    vi.mocked(getReviewStatusState).mockResolvedValue({ ok: false, error: "boom" });
+    vi.mocked(getReviewStatusState).mockResolvedValue({
+      ok: false,
+      permanent: false,
+      error: "boom",
+    });
     const { env, cpFetch } = createEnv();
 
     const outcome = await completeCloseOut(env, createMockLogger(), grant(), "trace-1");
@@ -240,13 +244,55 @@ describe("completeCloseOut", () => {
     expect(finalizeOutcomes(cpFetch)).toEqual(["retry"]);
   });
 
-  it.each([403, 422, 429, 502])(
-    "keeps the close-out for a retry, and logs an error, when GitHub answers the write %i",
+  it("finalizes without retrying when GitHub refuses the status read for good", async () => {
+    // An installation without the Commit statuses permission gets the same 403 every minute
+    // until the row expires, so a permanent refusal ends the close-out.
+    vi.mocked(getReviewStatusState).mockResolvedValue({
+      ok: false,
+      permanent: true,
+      error: "GitHub API returned 403",
+    });
+    const { env, cpFetch } = createEnv();
+
+    const outcome = await completeCloseOut(env, createMockLogger(), grant(), "trace-1");
+
+    expect(outcome).toBe("status_refused");
+    expect(postCommitStatus).not.toHaveBeenCalled();
+    expect(finalizeOutcomes(cpFetch)).toEqual(["done"]);
+  });
+
+  it.each([403, 404, 422])(
+    "finalizes without retrying when GitHub permanently refuses the write with %i",
     async (status) => {
-      // F4: nothing written means the status is still pending; only a later attempt can end it.
       vi.mocked(postCommitStatus).mockResolvedValueOnce({
         ok: false,
         status,
+        permanent: true,
+        error: `GitHub API returned ${status}`,
+      });
+      const { env, cpFetch } = createEnv();
+      const log = createMockLogger();
+
+      const outcome = await completeCloseOut(env, log, grant(), "trace-1");
+
+      expect(outcome).toBe("status_refused");
+      expect(finalizeOutcomes(cpFetch)).toEqual(["done"]);
+      expect(log.warn).toHaveBeenCalledWith(
+        "review_close_out.status_refused",
+        expect.objectContaining({ github_status: status })
+      );
+    }
+  );
+
+  it.each([403, 429, 502])(
+    "keeps the close-out for a retry, and logs an error, when GitHub answers the write %i",
+    async (status) => {
+      // F4: nothing written means the status is still pending; only a later attempt can end it.
+      // A 403 here is a rate limit: GitHub marks those, and they are not permanent.
+      vi.mocked(postCommitStatus).mockResolvedValueOnce({
+        ok: false,
+        status,
+        permanent: false,
         error: `GitHub API returned ${status}`,
       });
       const { env, cpFetch } = createEnv();

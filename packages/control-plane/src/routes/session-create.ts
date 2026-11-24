@@ -7,9 +7,10 @@ import {
   getValidHarnessOrDefault,
 } from "@open-inspect/shared/harnesses";
 import { HarnessAdmissionError, resolveHarnessSelection } from "../harness-admission";
-import type {
-  CreateSessionInput,
-  CreateSessionResponse,
+import {
+  REVIEW_SUPERSEDED_CODE,
+  type CreateSessionInput,
+  type CreateSessionResponse,
 } from "@open-inspect/shared/types/session-api";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { generateId } from "../auth/crypto";
@@ -394,7 +395,8 @@ export async function handleCreateSession(
     await initializeSession(env, input, ctx);
   } catch (e) {
     if (e instanceof ReviewGenerationSupersededError) {
-      return error(e.message, 409);
+      // The code lets the bot tell this apart from other 409s, such as a harness refusal.
+      return json({ error: e.message, code: REVIEW_SUPERSEDED_CODE }, 409);
     }
 
     if (e instanceof HarnessAdmissionError) return error(e.message, e.status);

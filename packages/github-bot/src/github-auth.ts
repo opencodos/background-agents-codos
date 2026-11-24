@@ -61,7 +61,21 @@ export interface GitHubAppConfig {
   userAgent?: string;
 }
 
-export type CommitStatusPostResult = { ok: true } | { ok: false; status?: number; error: string };
+export type CommitStatusPostResult =
+  { ok: true } | { ok: false; status?: number; permanent: boolean; error: string };
+
+/**
+ * Whether GitHub refused a request in a way a retry will not fix: the installation lacks the
+ * permission (403), or the repository or commit is gone (404, 422). A 403 that is a rate limit is
+ * not permanent: GitHub marks those with `retry-after` or an exhausted `x-ratelimit-remaining`.
+ */
+export function isPermanentGitHubRejection(response: Response): boolean {
+  if (response.status === 404 || response.status === 422) return true;
+  if (response.status !== 403) return false;
+  return (
+    !response.headers.has("retry-after") && response.headers.get("x-ratelimit-remaining") !== "0"
+  );
+}
 
 function base64UrlEncode(input: Uint8Array | string): string {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
@@ -287,18 +301,20 @@ export async function postCommitStatus(
     return {
       ok: false,
       status: response.status,
+      permanent: isPermanentGitHubRejection(response),
       error: `GitHub API returned ${response.status}`,
     };
   } catch (error) {
     return {
       ok: false,
+      permanent: false,
       error: error instanceof Error ? error.message : String(error),
     };
   }
 }
 
 export type ReviewStatusStateResult =
-  { ok: true; state: string | null } | { ok: false; error: string };
+  { ok: true; state: string | null } | { ok: false; permanent: boolean; error: string };
 
 /**
  * Read the current state of the review's own status context on a commit, or null when the commit
@@ -326,11 +342,15 @@ export async function getReviewStatusState(
         signal: AbortSignal.timeout(GITHUB_API_REQUEST_TIMEOUT_MS),
       });
       if (!response.ok) {
-        return { ok: false, error: `GitHub API returned ${response.status}` };
+        return {
+          ok: false,
+          permanent: isPermanentGitHubRejection(response),
+          error: `GitHub API returned ${response.status}`,
+        };
       }
       const parsed = combinedStatusResponseSchema.safeParse(await response.json());
       if (!parsed.success) {
-        return { ok: false, error: "invalid response" };
+        return { ok: false, permanent: false, error: "invalid response" };
       }
       const { statuses, total_count: totalCount } = parsed.data;
       const status = statuses.find((s) => s.context === REVIEW_STATUS_CONTEXT);
@@ -341,7 +361,11 @@ export async function getReviewStatusState(
       if (lastPage) return { ok: true, state: null };
     }
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return {
+      ok: false,
+      permanent: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 

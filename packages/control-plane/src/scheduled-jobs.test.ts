@@ -101,30 +101,39 @@ describe("SCHEDULED_JOBS", () => {
     expect(findScheduledJob("0 0 * * *")).toBeUndefined();
   });
 
-  it("runs the every-minute tick: queue health in the background, the scheduler tick awaited", async () => {
+  it("runs the every-minute tick: queue health and the review reaper in the background, the scheduler tick awaited", async () => {
     const deps = fakeDeps();
 
     await findScheduledJob(SCHEDULER_TICK_CRON)!.run(deps, 1_000);
 
     expect(createScheduler).toHaveBeenCalledWith(deps.db, deps.env, deps.backgroundTasks);
     expect(schedulerTick).toHaveBeenCalledTimes(1);
+    // The reaper must not run inline: a slow session runtime would delay the automation tick.
+    expect(reapSupersededReviewSessions).not.toHaveBeenCalled();
+    expect(deps.submitted.map((entry) => entry.name)).toEqual([
+      "autofix_queue_health",
+      "review_reaper",
+    ]);
+    expect(checkAutofixQueueHealth).not.toHaveBeenCalled();
+    await deps.submitted[0]!.task();
+    expect(checkAutofixQueueHealth).toHaveBeenCalledWith(deps.env, deps.log);
+    await deps.submitted[1]!.task();
     expect(reapSupersededReviewSessions).toHaveBeenCalledWith(
       deps.db,
       deps.sessions,
       deps.env,
       deps.backgroundTasks
     );
-    expect(deps.submitted.map((entry) => entry.name)).toEqual(["autofix_queue_health"]);
-    expect(checkAutofixQueueHealth).not.toHaveBeenCalled();
-    await deps.submitted[0]!.task();
-    expect(checkAutofixQueueHealth).toHaveBeenCalledWith(deps.env, deps.log);
   });
 
-  it("still runs the scheduler tick when the review reaper throws", async () => {
+  it("logs, rather than rejects, when the background review reaper throws", async () => {
     const deps = fakeDeps();
     vi.mocked(reapSupersededReviewSessions).mockRejectedValueOnce(new Error("d1 unavailable"));
 
     await findScheduledJob(SCHEDULER_TICK_CRON)!.run(deps, 1_000);
+    await expect(
+      deps.submitted.find((entry) => entry.name === "review_reaper")!.task()
+    ).resolves.toBeUndefined();
 
     expect(schedulerTick).toHaveBeenCalledTimes(1);
     expect(deps.log.warn).toHaveBeenCalledWith(

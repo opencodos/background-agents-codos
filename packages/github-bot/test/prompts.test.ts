@@ -15,7 +15,9 @@ import { buildCodeReviewPrompt, buildCommentActionPrompt } from "../src/prompts"
 function runReviewSubmission(
   prompt: string,
   tokenCurlExit: number,
-  tokenBody = '{"token":"reviewer-token"}'
+  tokenBody = '{"token":"reviewer-token"}',
+  /** Stderr and exit status of a failing review POST; the POST succeeds when absent. */
+  reviewPostFailure?: { stderr: string; exit: number }
 ) {
   const script = /```sh\n([\s\S]*?)\n```/.exec(prompt)?.[1];
   expect(script).toBeDefined();
@@ -37,7 +39,9 @@ function runReviewSubmission(
       join(dir, "gh"),
       `#!/bin/sh\nprintf '%s %s\\n' "$GH_TOKEN" "$*" >> '${ghLog}'\n` +
         `case "$2" in\n` +
-        `  */reviews) printf 'https://github.test/review' ;;\n` +
+        (reviewPostFailure
+          ? `  */reviews) printf '%s\\n' '${reviewPostFailure.stderr}' >&2; exit ${reviewPostFailure.exit} ;;\n`
+          : `  */reviews) printf 'https://github.test/review' ;;\n`) +
         `  */pulls/*) printf 'abc123 open draft:false' ;;\n` +
         `esac\n`
     );
@@ -277,6 +281,43 @@ describe("buildCodeReviewPrompt", () => {
         "Stop, submit nothing to GitHub, and end with a final response stating that the review " +
           "was not submitted because the reviewer token could not be fetched, including the error output."
       );
+    });
+  });
+
+  describe("when GitHub rejects the review body", () => {
+    const prompt = buildCodeReviewPrompt(baseParams);
+
+    it("exits with the rejection status, releases the lease, and writes no status", () => {
+      const run = runReviewSubmission(prompt, 0, undefined, {
+        stderr: "gh: Validation Failed (HTTP 422)",
+        exit: 1,
+      });
+
+      expect(run.status).toBe(3);
+      expect(run.stderr).toContain("gh: Validation Failed (HTTP 422)");
+      expect(run.stderr).toContain("GitHub rejected /tmp/review.json (HTTP 422)");
+      expect(run.curlCalls).toContain("-X DELETE");
+      expect(run.ghCalls).not.toContain("/statuses/");
+    });
+
+    it("exits 0 and writes no status after any other POST failure", () => {
+      const run = runReviewSubmission(prompt, 0, undefined, {
+        stderr: "gh: Bad credentials (HTTP 401)",
+        exit: 1,
+      });
+
+      expect(run.status).toBe(0);
+      expect(run.stderr).toContain("HTTP 401");
+      expect(run.curlCalls).toContain("-X DELETE");
+      expect(run.ghCalls).not.toContain("/statuses/");
+    });
+
+    it("tells the agent to fix the body and rerun only after a rejection", () => {
+      const guidance = prompt.replace(/\s+/g, " ");
+
+      expect(guidance).toContain("If it exits with status 3, GitHub rejected the review body");
+      expect(guidance).toContain("Do this at most 2 times.");
+      expect(guidance).toContain("Do not rerun it after any other exit");
     });
   });
 

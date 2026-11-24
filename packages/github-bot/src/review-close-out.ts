@@ -74,7 +74,8 @@ export type ReviewCloseOutOutcome =
   | "pr_not_open"
   | "lease_budget_exhausted"
   | "status_unreadable"
-  | "status_write_failed";
+  | "status_write_failed"
+  | "status_refused";
 
 /**
  * The description for a review that ended with its status still pending. A turn that reported
@@ -171,6 +172,12 @@ async function writeTerminalStatus(
 
   const status = await getReviewStatusState(token, owner, repo, headSha, userAgent);
   if (!status.ok) {
+    // A permanent refusal (no Commit statuses permission, or the commit is gone) fails the same
+    // way every time, so re-driving it from the reaper would only repeat it until the row expires.
+    if (status.permanent) {
+      log.warn("review_close_out.status_refused", { ...meta, error: status.error });
+      return { outcome: "status_refused", finalize: "done" };
+    }
     log.warn("review_close_out.status_unreadable", { ...meta, error: status.error });
     return { outcome: "status_unreadable", finalize: "retry" };
   }
@@ -211,8 +218,16 @@ async function writeTerminalStatus(
     log.info("review_close_out.closed_out", { ...meta, description });
     return { outcome: "closed_out", finalize: "done" };
   }
+  if (result.permanent) {
+    log.warn("review_close_out.status_refused", {
+      ...meta,
+      ...(result.status === undefined ? {} : { github_status: result.status }),
+      error: result.error,
+    });
+    return { outcome: "status_refused", finalize: "done" };
+  }
   // Nothing was written, so GitHub still shows what it showed before: keep the close-out for the
-  // reaper, whatever the rejection. The control plane gives up on it after a week.
+  // reaper. The control plane gives up on it after a week.
   log.error("review_close_out.status_write_failed", {
     ...meta,
     ...(result.status === undefined ? {} : { github_status: result.status }),
