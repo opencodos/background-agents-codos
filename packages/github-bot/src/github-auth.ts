@@ -67,14 +67,21 @@ export type CommitStatusPostResult =
 /**
  * Whether GitHub refused a request in a way a retry will not fix: the installation lacks the
  * permission (403), or the repository or commit is gone (404, 422). A 403 that is a rate limit is
- * not permanent: GitHub marks those with `retry-after` or an exhausted `x-ratelimit-remaining`.
+ * not permanent. A primary limit sets `retry-after` or exhausts `x-ratelimit-remaining`, but a
+ * secondary limit can do neither, so a 403 whose body names a rate limit (or abuse detection, its
+ * older wording) is never permanent either.
  */
-export function isPermanentGitHubRejection(response: Response): boolean {
+export async function isPermanentGitHubRejection(response: Response): Promise<boolean> {
   if (response.status === 404 || response.status === 422) return true;
   if (response.status !== 403) return false;
-  return (
-    !response.headers.has("retry-after") && response.headers.get("x-ratelimit-remaining") !== "0"
-  );
+  if (
+    response.headers.has("retry-after") ||
+    response.headers.get("x-ratelimit-remaining") === "0"
+  ) {
+    return false;
+  }
+  const body = await response.text().catch(() => "");
+  return !/rate limit|abuse/i.test(body);
 }
 
 function base64UrlEncode(input: Uint8Array | string): string {
@@ -301,7 +308,7 @@ export async function postCommitStatus(
     return {
       ok: false,
       status: response.status,
-      permanent: isPermanentGitHubRejection(response),
+      permanent: await isPermanentGitHubRejection(response),
       error: `GitHub API returned ${response.status}`,
     };
   } catch (error) {
@@ -344,7 +351,7 @@ export async function getReviewStatusState(
       if (!response.ok) {
         return {
           ok: false,
-          permanent: isPermanentGitHubRejection(response),
+          permanent: await isPermanentGitHubRejection(response),
           error: `GitHub API returned ${response.status}`,
         };
       }

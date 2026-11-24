@@ -270,6 +270,27 @@ describe("postCommitStatus", () => {
     expect(result).toMatchObject({ ok: false, status: 403, permanent: false });
   });
 
+  it("does not treat a secondary rate limit as permanent", async () => {
+    // A secondary limit can leave x-ratelimit-remaining above zero and set no retry-after; only
+    // its body says what it is.
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          message: "You have exceeded a secondary rate limit. Please wait a few minutes.",
+        }),
+        { status: 403, headers: { "x-ratelimit-remaining": "4999" } }
+      )
+    );
+
+    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "pending",
+      context: "open-inspect",
+      description: "Review in progress",
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 403, permanent: false });
+  });
+
   it("does not treat a server error as permanent", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 502 }));
 
@@ -777,6 +798,21 @@ describe("getReviewStatusState", () => {
     expect(vi.mocked(globalThis.fetch).mock.calls[1][0]).toBe(
       "https://api.github.com/repos/acme/widgets/commits/abc123/status?per_page=100&page=2"
     );
+  });
+
+  it("does not treat a secondary rate limit on the status read as permanent", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ message: "You have exceeded a secondary rate limit." }), {
+        status: 403,
+        headers: { "x-ratelimit-remaining": "4999" },
+      })
+    );
+
+    await expect(getReviewStatusState("test-token", "acme", "widgets", "abc123")).resolves.toEqual({
+      ok: false,
+      permanent: false,
+      error: "GitHub API returned 403",
+    });
   });
 
   it("reports a non-2xx response as unreadable", async () => {
