@@ -7,7 +7,6 @@ import { TeamStore } from "../../src/db/teams";
 import { TeamRepositoryGrantStore } from "../../src/db/team-repository-grants";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch, sqlDatabase } from "./helpers";
-import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 
 const BROWSER_USER_ID = "11111111111111111111111111111111";
 
@@ -28,7 +27,6 @@ function automation(id: string, userId: string): AutomationRow {
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
-    max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     next_run_at: null,
     consecutive_failures: 0,
     created_by: userId,
@@ -231,6 +229,7 @@ describe("automation router authorization", () => {
       ...row,
       max_retries: 0,
       sandbox_timeout_ms: null,
+      max_concurrent_runs: 1,
     });
     expect(
       (await store.getEnvironmentsForAutomation(row.id)).map((member) => member.environment_id)

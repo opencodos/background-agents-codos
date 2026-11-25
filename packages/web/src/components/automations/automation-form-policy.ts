@@ -11,7 +11,6 @@ import {
 } from "@open-inspect/shared/triggers";
 import {
   DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
-  MAX_AUTOMATION_CONCURRENT_RUNS,
   MAX_AUTOMATION_NAME_LENGTH,
   validateAutomationTargetCounts,
   type Automation,
@@ -39,12 +38,12 @@ export interface AutomationFormValues {
   scheduleCron?: string;
   scheduleOnceAt?: number;
   scheduleTz?: string;
-  maxConcurrentRuns?: number;
-
   /** Launch retries; submitted for schedule triggers only. */
   maxRetries?: number;
   /** Sandbox timeout override for every trigger type; null inherits. */
   sandboxTimeoutMs?: number | null;
+  /** Firings allowed in flight at once; submitted for recurring schedule triggers only. */
+  maxConcurrentRuns?: number;
   instructions: string;
   triggerType: AutomationTriggerType;
   eventType?: string;
@@ -59,9 +58,8 @@ export interface AutomationTriggerDraft {
   scheduleMode: "recurring" | "once";
   scheduleOnceAt: string;
   scheduleTz: string;
-  maxConcurrentRuns: number;
-
   maxRetries: number;
+  maxConcurrentRuns: number;
   eventType: string;
   conditions: TriggerCondition[];
   /** Slack triggers only: let other bots' messages trigger the automation. */
@@ -116,19 +114,6 @@ type InitialAutomationFormValues = Partial<AutomationFormValues>;
 
 export const DEFAULT_AUTOMATION_SCHEDULE_CRON = "0 9 * * *";
 
-/**
- * Coerce a stored or template concurrency to the range the API accepts. An
- * automation created before the field existed, or a template that omits it,
- * reads as DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS rather than as an invalid
- * form.
- */
-export function clampConcurrentRuns(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS;
-  }
-  return Math.min(MAX_AUTOMATION_CONCURRENT_RUNS, Math.max(1, Math.trunc(value)));
-}
-
 function toLocalDateTime(timestamp: number): string {
   const date = new Date(timestamp);
   return new Date(timestamp - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
@@ -152,9 +137,8 @@ export function createAutomationFormDraft(
       scheduleOnceAt:
         initialValues.scheduleOnceAt != null ? toLocalDateTime(initialValues.scheduleOnceAt) : "",
       scheduleTz: initialValues.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
-      maxConcurrentRuns: clampConcurrentRuns(initialValues.maxConcurrentRuns),
-
       maxRetries: initialValues.maxRetries ?? 0,
+      maxConcurrentRuns: initialValues.maxConcurrentRuns ?? DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
       eventType: initialValues.eventType ?? "",
       conditions: initialValues.triggerConfig?.conditions ?? [],
       includeBotMessages: initialValues.triggerConfig?.slack?.includeBotMessages === true,
@@ -182,9 +166,9 @@ export function automationToFormValues(automation: Automation): InitialAutomatio
     scheduleCron: automation.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
     scheduleTz: automation.scheduleTz,
     scheduleOnceAt: automation.scheduleOnceAt ?? undefined,
-    maxConcurrentRuns: automation.maxConcurrentRuns,
     maxRetries: automation.maxRetries,
     sandboxTimeoutMs: automation.sandboxTimeoutMs,
+    maxConcurrentRuns: automation.maxConcurrentRuns,
     instructions: automation.instructions,
     triggerType: automation.triggerType,
     eventType: automation.eventType ?? undefined,
@@ -478,11 +462,13 @@ function buildSubmissionValues({
   if (draft.trigger.type === "schedule") {
     return {
       ...values,
-      maxConcurrentRuns: clampConcurrentRuns(draft.trigger.maxConcurrentRuns),
       maxRetries: draft.trigger.maxRetries,
       ...(draft.trigger.scheduleMode === "once"
         ? { scheduleOnceAt }
-        : { scheduleCron: draft.trigger.scheduleCron }),
+        : {
+            scheduleCron: draft.trigger.scheduleCron,
+            maxConcurrentRuns: draft.trigger.maxConcurrentRuns,
+          }),
       scheduleTz:
         mode === "create" && draft.trigger.scheduleMode === "once"
           ? Intl.DateTimeFormat().resolvedOptions().timeZone

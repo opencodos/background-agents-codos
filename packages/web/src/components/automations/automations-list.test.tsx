@@ -6,10 +6,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ComponentProps } from "react";
-import {
-  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
-  type AutomationListItem,
-} from "@open-inspect/shared/types/automations";
+import type { AutomationListItem } from "@open-inspect/shared/types/automations";
 import { AutomationsList } from "./automations-list";
 
 expect.extend(matchers);
@@ -47,11 +44,11 @@ function makeAutomation(overrides: Partial<AutomationListItem> = {}): Automation
     model: "openai/gpt-5.4",
     reasoningEffort: null,
     enabled: true,
-    maxConcurrentRuns: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     nextRunAt: null,
     consecutiveFailures: 0,
     maxRetries: 0,
     sandboxTimeoutMs: null,
+    maxConcurrentRuns: 1,
     createdBy: "user-1",
     userId: CURRENT_USER_ID,
     ownerTeamId: null,
