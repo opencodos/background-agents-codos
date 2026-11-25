@@ -275,7 +275,11 @@ test("disabled bots are not deployed or bound", () => {
 });
 
 test("the control plane binds the github bot for review completion callbacks", () => {
-  const p = plan({ ENABLE_GITHUB_BOT: "true", GH_WEBHOOK_SECRET: "w", GH_BOT_USERNAME: "bot[bot]" });
+  const p = plan({
+    ENABLE_GITHUB_BOT: "true",
+    GH_WEBHOOK_SECRET: "w",
+    GH_BOT_USERNAME: "bot[bot]",
+  });
   assert.deepEqual(worker(p, "control-plane").wrangler.services, [
     { binding: "SLACK_BOT", service: "open-inspect-slack-bot-acme" },
     { binding: "GITHUB_BOT", service: "open-inspect-github-bot-acme" },
