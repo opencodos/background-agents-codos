@@ -219,7 +219,17 @@ test("the deploy gate waits only for an applying Terraform run, and deploys anyw
     /No Terraform run started for this commit; deploying without waiting/
   );
   assert.match(deployWorkflow, /endswith\("Apply"\)/);
-  assert.match(deployWorkflow, /\[ "\$apply" = "success" \]/);
+  assert.match(deployWorkflow, /\[ "\$apply" != "success" \]/);
+});
+
+test("a Terraform completion for a commit main has moved past does not deploy it", () => {
+  // Deploying it would roll back a later commit that already deployed on its own push.
+  assert.match(
+    deployWorkflow,
+    /tip="\$\(gh api "repos\/\$GITHUB_REPOSITORY\/commits\/main" --jq \.sha\)"/
+  );
+  assert.match(deployWorkflow, /elif \[ "\$RUN_SHA" != "\$tip" \]; then/);
+  assert.match(deployWorkflow, /skipping this stale deploy/);
 });
 
 test("pushes classify with the apply Environment, pull requests with the plan Environment", () => {

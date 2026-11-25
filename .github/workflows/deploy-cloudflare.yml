@@ -71,10 +71,15 @@ jobs:
               sha="$RUN_SHA"
               if [ "$RUN_CONCLUSION" = "success" ] && { [ "$RUN_EVENT" = "push" ] || [ "$RUN_EVENT" = "workflow_dispatch" ]; }; then
                 apply="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs" --paginate --jq '.jobs[] | select(.name | endswith("Apply")) | .conclusion')"
-                if [ "$apply" = "success" ]; then
-                  deploy=true
-                else
+                tip="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+                if [ "$apply" != "success" ]; then
                   echo "::notice::Terraform did not apply for this run; nothing to deploy after it."
+                elif [ "$RUN_SHA" != "$tip" ]; then
+                  # A later commit is on main and has deployed, or will deploy, on its own push
+                  # or Terraform run. Deploying this older commit now would roll it back.
+                  echo "::notice::main has moved past $RUN_SHA (now $tip); skipping this stale deploy."
+                else
+                  deploy=true
                 fi
               fi
               ;;
