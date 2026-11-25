@@ -171,7 +171,7 @@ would double-count one long-running sweep and could auto-pause a recoverable aut
 ### Should repeated partial failures auto-pause the automation?
 
 Answer: yes. Any invocation with at least one failed child counts **one** failure toward the same
-3-strike auto-pause threshold as a fully failed invocation. The failure is counted when the first
+5-strike auto-pause threshold as a fully failed invocation. The failure is counted when the first
 child fails (via a compare-and-set stamp on the invocation, `failure_counted_at`, so concurrent
 completion callbacks, launch failures, and recovery sweeps count it exactly once), not when the last
 child finishes.

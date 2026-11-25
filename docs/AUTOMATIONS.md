@@ -540,9 +540,9 @@ listening immediately. Resuming also resets the consecutive failure counter (see
 
 Click **Trigger Now** to fire a one-off run immediately across the automation's full repository
 selection. For scheduled automations, this does not affect the next scheduled run time. Manual
-triggers follow the same concurrency rules as all other runs: if a run is already active, the
-trigger is rejected. Trigger Now also works while the automation is paused, so you can verify a fix
-before resuming.
+triggers follow the same concurrency rules as all other runs: the trigger is rejected when active
+firings have reached the automation's [concurrent runs](#concurrent-runs) limit. Trigger Now also
+works while the automation is paused, so you can verify a fix before resuming.
 
 Manual runs use the requester's authority and identity, not the stored executor's; pull requests the
 run's own prompt opens are created by the GitHub App. In addition to trigger permission, the
@@ -666,7 +666,7 @@ This prevents overlapping sessions from interfering with each other on the same 
 
 ## Auto-Pause
 
-If an automation fails **3 consecutive times**, it is automatically paused to prevent runaway
+If an automation fails **5 consecutive times**, it is automatically paused to prevent runaway
 failures. The status changes to **Paused** and no further runs will start until you resume it.
 
 To re-enable the automation, click **Resume**. This resets the failure counter. Scheduled
@@ -694,6 +694,6 @@ auto-pause threshold.
 | Minimum schedule interval              | 15 minutes                             |
 | Webhook payload size                   | 64 KB                                  |
 | Concurrent runs per automation         | 1 by default, up to 10 (schedule only) |
-| Consecutive failures before auto-pause | 3                                      |
+| Consecutive failures before auto-pause | 5                                      |
 | Launch retries per scheduled run       | 5                                      |
 | Run execution timeout                  | 90 minutes                             |
