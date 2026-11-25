@@ -1233,9 +1233,9 @@ For configuration and troubleshooting, see [Linear Integration](./integrations/L
 
 The GitHub bot handles PR review assignments and @mention commands. To deploy it, set
 `enable_github_bot = true` in `terraform.tfvars` and run `terraform apply`, then set these in
-`deploy.env` and run the Cloudflare deploy. Unlike Slack and Linear, this needs no
-`ENABLE_SERVICE_BINDINGS` step: only the GitHub bot binds the control plane, which is already
-deployed.
+`deploy.env` and run the Cloudflare deploy. As with Slack and Linear, the control plane binds the
+bot back (`GITHUB_BOT`, for review completion callbacks), so the first deploy sets
+`ENABLE_SERVICE_BINDINGS=false`; then set it to `true` and deploy again.
 
 ```bash
 ENABLE_GITHUB_BOT=true

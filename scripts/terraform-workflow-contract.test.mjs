@@ -222,14 +222,19 @@ test("the deploy gate waits only for an applying Terraform run, and deploys anyw
   assert.match(deployWorkflow, /\[ "\$apply" != "success" \]/);
 });
 
-test("a Terraform completion for a commit main has moved past does not deploy it", () => {
-  // Deploying it would roll back a later commit that already deployed on its own push.
+test("a Terraform completion for a commit main has moved past deploys the tip, not the old commit", () => {
+  // Deploying the old commit would roll back a later one; skipping it would strand its code when
+  // the later commit deploys nothing of its own (a docs-only push).
   assert.match(
     deployWorkflow,
     /tip="\$\(gh api "repos\/\$GITHUB_REPOSITORY\/commits\/main" --jq \.sha\)"/
   );
-  assert.match(deployWorkflow, /elif \[ "\$RUN_SHA" != "\$tip" \]; then/);
-  assert.match(deployWorkflow, /skipping this stale deploy/);
+  assert.match(deployWorkflow, /elif \[ "\$RUN_SHA" = "\$tip" \]; then\n\s+deploy=true/);
+  assert.match(
+    deployWorkflow,
+    /terraform-\$ENVIRONMENT\.yml\/runs\?head_sha=\$tip&event=push" --jq '\[\.workflow_runs\[\] \| select\(\.status != "completed"\)\] \| length'/
+  );
+  assert.match(deployWorkflow, /sha="\$tip"\n\s+deploy=true/);
 });
 
 test("pushes classify with the apply Environment, pull requests with the plan Environment", () => {

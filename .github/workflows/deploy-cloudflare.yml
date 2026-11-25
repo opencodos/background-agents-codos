@@ -74,12 +74,20 @@ jobs:
                 tip="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
                 if [ "$apply" != "success" ]; then
                   echo "::notice::Terraform did not apply for this run; nothing to deploy after it."
-                elif [ "$RUN_SHA" != "$tip" ]; then
-                  # A later commit is on main and has deployed, or will deploy, on its own push
-                  # or Terraform run. Deploying this older commit now would roll it back.
-                  echo "::notice::main has moved past $RUN_SHA (now $tip); skipping this stale deploy."
-                else
+                elif [ "$RUN_SHA" = "$tip" ]; then
                   deploy=true
+                else
+                  # main moved on during the apply. Deploying this older commit would roll back
+                  # anything newer, so deploy the tip, which contains it, unless the tip has a
+                  # Terraform run still to finish: that run's completion deploys the tip.
+                  pending="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/terraform-$ENVIRONMENT.yml/runs?head_sha=$tip&event=push" --jq '[.workflow_runs[] | select(.status != "completed")] | length')"
+                  if [ "$pending" -gt 0 ]; then
+                    echo "::notice::main has moved past $RUN_SHA to $tip, whose own Terraform run deploys it."
+                  else
+                    echo "::notice::main has moved past $RUN_SHA; deploying the tip $tip instead."
+                    sha="$tip"
+                    deploy=true
+                  fi
                 fi
               fi
               ;;
