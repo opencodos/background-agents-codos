@@ -78,17 +78,23 @@ jobs:
                   deploy=true
                 else
                   # main moved on during the apply. Deploying this older commit would roll back
-                  # anything newer, so deploy the tip, which contains it, unless the tip has a
-                  # Terraform run of its own. That run decides for the tip, whether it is still
-                  # going or already finished: a successful apply deploys the tip, and a failed
-                  # one must not be bypassed from here.
-                  tip_runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/terraform-$ENVIRONMENT.yml/runs?head_sha=$tip&event=push&per_page=1" --jq .total_count)"
-                  if [ "$tip_runs" -gt 0 ]; then
-                    echo "::notice::main has moved past $RUN_SHA to $tip, whose own Terraform run decides its deploy."
-                  else
+                  # anything newer, so deploy the tip, which contains it, unless the tip's own
+                  # Terraform run decides for it: one still running, one that failed (never
+                  # bypassed from here), or one whose apply succeeded (its completion deploys the
+                  # tip). A tip with no Terraform run, or whose run skipped its apply, is deployed
+                  # here, since nothing else deploys it after this apply.
+                  tip_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/terraform-$ENVIRONMENT.yml/runs?head_sha=$tip&event=push&per_page=1" --jq '.workflow_runs[0] | if . == null then "none" else "\(.id) \(.status) \(.conclusion)" end')"
+                  read -r tip_run_id tip_status tip_conclusion <<<"$tip_run"
+                  tip_apply=""
+                  if [ "$tip_run_id" != "none" ] && [ "$tip_status" = "completed" ] && [ "$tip_conclusion" = "success" ]; then
+                    tip_apply="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$tip_run_id/jobs" --paginate --jq '.jobs[] | select(.name | endswith("Apply")) | .conclusion')"
+                  fi
+                  if [ "$tip_run_id" = "none" ] || { [ "$tip_status" = "completed" ] && [ "$tip_conclusion" = "success" ] && [ "$tip_apply" != "success" ]; }; then
                     echo "::notice::main has moved past $RUN_SHA; deploying the tip $tip instead."
                     sha="$tip"
                     deploy=true
+                  else
+                    echo "::notice::main has moved past $RUN_SHA to $tip, whose own Terraform run decides its deploy."
                   fi
                 fi
               fi

@@ -222,23 +222,100 @@ test("the deploy gate waits only for an applying Terraform run, and deploys anyw
   assert.match(deployWorkflow, /\[ "\$apply" != "success" \]/);
 });
 
-test("a Terraform completion for a commit main has moved past deploys the tip, not the old commit", () => {
-  // Deploying the old commit would roll back a later one; skipping it would strand its code when
-  // the later commit deploys nothing of its own (a docs-only push).
-  assert.match(
-    deployWorkflow,
-    /tip="\$\(gh api "repos\/\$GITHUB_REPOSITORY\/commits\/main" --jq \.sha\)"/
+// Runs the gate's real Decide script for a Terraform completion, against a fake `gh` that answers
+// each API path with a fixed value (already reduced, as `--jq` would), and returns its outputs.
+async function decideAfterApply(responses) {
+  const { execFileSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, readFileSync, chmodSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const step = deployWorkflow.slice(deployWorkflow.indexOf("id: decide"));
+  const body = step.slice(step.indexOf("run: |\n") + "run: |\n".length);
+  const lines = body.split("\n");
+  const indent = lines[0].match(/^ */)[0].length;
+  const script = [];
+  for (const line of lines) {
+    if (line.trim() !== "" && line.match(/^ */)[0].length < indent) break;
+    script.push(line.slice(indent));
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), "deploy-gate-"));
+  writeFileSync(join(dir, "responses.json"), JSON.stringify(responses));
+  writeFileSync(
+    join(dir, "gh"),
+    `#!/usr/bin/env node
+const responses = require(${JSON.stringify(join(dir, "responses.json"))});
+const path = process.argv[3];
+const key = Object.keys(responses).find((k) => path.includes(k));
+if (key === undefined) { console.error("unexpected gh call: " + path); process.exit(1); }
+process.stdout.write(responses[key] + "\\n");
+`
   );
-  assert.match(deployWorkflow, /elif \[ "\$RUN_SHA" = "\$tip" \]; then\n\s+deploy=true/);
-  // Any Terraform run of the tip's own, finished or not, decides for the tip, so a failed apply
-  // is never bypassed by an older commit's completion.
-  assert.match(
-    deployWorkflow,
-    /tip_runs="\$\(gh api "repos\/\$GITHUB_REPOSITORY\/actions\/workflows\/terraform-\$ENVIRONMENT\.yml\/runs\?head_sha=\$tip&event=push&per_page=1" --jq \.total_count\)"/
+  chmodSync(join(dir, "gh"), 0o755);
+  const output = join(dir, "output");
+  writeFileSync(output, "");
+  const stdout = execFileSync("bash", ["-c", script.join("\n")], {
+    env: {
+      PATH: `${dir}:${process.env.PATH}`,
+      EVENT: "workflow_run",
+      ENVIRONMENT: "production",
+      RUN_ID: "1",
+      RUN_CONCLUSION: "success",
+      RUN_EVENT: "push",
+      RUN_SHA: "aaa",
+      GITHUB_SHA: "aaa",
+      GITHUB_REPOSITORY: "acme/repo",
+      GITHUB_OUTPUT: output,
+    },
+    encoding: "utf8",
+  });
+  const result = Object.fromEntries(
+    readFileSync(output, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => line.split("="))
   );
-  assert.doesNotMatch(deployWorkflow, /select\(\.status != "completed"\)/);
-  assert.match(deployWorkflow, /if \[ "\$tip_runs" -gt 0 \]; then/);
-  assert.match(deployWorkflow, /sha="\$tip"\n\s+deploy=true/);
+  return { ...result, stdout };
+}
+
+const APPLIED = { "runs/1/jobs": "success" };
+
+test("a Terraform completion deploys its commit while it is still main's tip", async () => {
+  const result = await decideAfterApply({ ...APPLIED, "commits/main": "aaa" });
+  assert.deepEqual([result.deploy, result.sha], ["true", "aaa"]);
+});
+
+test("a Terraform completion whose apply was skipped deploys nothing", async () => {
+  const result = await decideAfterApply({ "runs/1/jobs": "skipped", "commits/main": "aaa" });
+  assert.equal(result.deploy, "false");
+});
+
+test("a Terraform completion for a commit main has moved past never deploys the old commit", async () => {
+  // Deploying the old commit would roll back a later one. Skipping it would strand its code when
+  // nothing else deploys the tip after this apply: a docs-only tip has no runs of its own, and a
+  // tip whose apply was skipped deployed on its push, possibly before this apply finished.
+  const tipRuns = "terraform-production.yml/runs?head_sha=bbb";
+  const cases = [
+    ["no Terraform run of its own", { [tipRuns]: "none" }, "true"],
+    [
+      "its own run skipped the apply",
+      { [tipRuns]: "7 completed success", "runs/7/jobs": "skipped" },
+      "true",
+    ],
+    ["its own run is still going", { [tipRuns]: "7 in_progress null" }, "false"],
+    ["its own run failed", { [tipRuns]: "7 completed failure" }, "false"],
+    [
+      "its own apply succeeded",
+      { [tipRuns]: "7 completed success", "runs/7/jobs": "success" },
+      "false",
+    ],
+  ];
+  for (const [label, responses, deploy] of cases) {
+    const result = await decideAfterApply({ ...APPLIED, "commits/main": "bbb", ...responses });
+    assert.equal(result.deploy, deploy, `tip with ${label}`);
+    if (deploy === "true") assert.equal(result.sha, "bbb", `tip with ${label} deploys the tip`);
+  }
 });
 
 test("pushes classify with the apply Environment, pull requests with the plan Environment", () => {
