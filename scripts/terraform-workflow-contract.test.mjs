@@ -230,10 +230,14 @@ test("a Terraform completion for a commit main has moved past deploys the tip, n
     /tip="\$\(gh api "repos\/\$GITHUB_REPOSITORY\/commits\/main" --jq \.sha\)"/
   );
   assert.match(deployWorkflow, /elif \[ "\$RUN_SHA" = "\$tip" \]; then\n\s+deploy=true/);
+  // Any Terraform run of the tip's own, finished or not, decides for the tip, so a failed apply
+  // is never bypassed by an older commit's completion.
   assert.match(
     deployWorkflow,
-    /terraform-\$ENVIRONMENT\.yml\/runs\?head_sha=\$tip&event=push" --jq '\[\.workflow_runs\[\] \| select\(\.status != "completed"\)\] \| length'/
+    /tip_runs="\$\(gh api "repos\/\$GITHUB_REPOSITORY\/actions\/workflows\/terraform-\$ENVIRONMENT\.yml\/runs\?head_sha=\$tip&event=push&per_page=1" --jq \.total_count\)"/
   );
+  assert.doesNotMatch(deployWorkflow, /select\(\.status != "completed"\)/);
+  assert.match(deployWorkflow, /if \[ "\$tip_runs" -gt 0 \]; then/);
   assert.match(deployWorkflow, /sha="\$tip"\n\s+deploy=true/);
 });
 

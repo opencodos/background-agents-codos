@@ -79,10 +79,12 @@ jobs:
                 else
                   # main moved on during the apply. Deploying this older commit would roll back
                   # anything newer, so deploy the tip, which contains it, unless the tip has a
-                  # Terraform run still to finish: that run's completion deploys the tip.
-                  pending="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/terraform-$ENVIRONMENT.yml/runs?head_sha=$tip&event=push" --jq '[.workflow_runs[] | select(.status != "completed")] | length')"
-                  if [ "$pending" -gt 0 ]; then
-                    echo "::notice::main has moved past $RUN_SHA to $tip, whose own Terraform run deploys it."
+                  # Terraform run of its own. That run decides for the tip, whether it is still
+                  # going or already finished: a successful apply deploys the tip, and a failed
+                  # one must not be bypassed from here.
+                  tip_runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/terraform-$ENVIRONMENT.yml/runs?head_sha=$tip&event=push&per_page=1" --jq .total_count)"
+                  if [ "$tip_runs" -gt 0 ]; then
+                    echo "::notice::main has moved past $RUN_SHA to $tip, whose own Terraform run decides its deploy."
                   else
                     echo "::notice::main has moved past $RUN_SHA; deploying the tip $tip instead."
                     sha="$tip"
