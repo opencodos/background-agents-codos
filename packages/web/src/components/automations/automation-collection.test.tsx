@@ -4,10 +4,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
-  type AutomationListItem,
-} from "@open-inspect/shared/types/automations";
+import type { AutomationListItem } from "@open-inspect/shared";
 import { TeamAutomations } from "@/components/teams/team-automations";
 import { AutomationCollection } from "./automation-collection";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -50,11 +47,11 @@ const automation: AutomationListItem = {
   model: "openai/gpt-5.4",
   reasoningEffort: null,
   enabled: true,
-  maxConcurrentRuns: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   nextRunAt: null,
   consecutiveFailures: 0,
   maxRetries: 0,
   sandboxTimeoutMs: null,
+  maxConcurrentRuns: 1,
   createdBy: "user-1",
   userId: null,
   ownerTeamId: null,

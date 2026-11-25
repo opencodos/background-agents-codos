@@ -60,13 +60,13 @@ reassigned without changing ownership.
 
 ### Trigger-Specific Fields
 
-| Trigger Type        | Additional Fields                                                                            |
-| ------------------- | -------------------------------------------------------------------------------------------- |
-| **Schedule**        | **Schedule** (**Recurring** or **Run once**), **Timezone** (recurring only), and **Retries** |
-| **Inbound Webhook** | No extra required fields                                                                     |
-| **Sentry Alert**    | **Event Type** and **Sentry Client Secret**                                                  |
-| **GitHub Event**    | **Event Type** and optional **Conditions**                                                   |
-| **Slack Message**   | **Conditions** (a Slack Channel condition is required; a Message Text condition is optional) |
+| Trigger Type        | Additional Fields                                                                                                    |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **Schedule**        | **Schedule** (**Recurring** or **Run once**), **Timezone** and **Concurrent runs** (recurring only), and **Retries** |
+| **Inbound Webhook** | No extra required fields                                                                                             |
+| **Sentry Alert**    | **Event Type** and **Sentry Client Secret**                                                                          |
+| **GitHub Event**    | **Event Type** and optional **Conditions**                                                                           |
+| **Slack Message**   | **Conditions** (a Slack Channel condition is required; a Message Text condition is optional)                         |
 
 For non-schedule automations, schedule fields are not used.
 
@@ -540,9 +540,9 @@ listening immediately. Resuming also resets the consecutive failure counter (see
 
 Click **Trigger Now** to fire a one-off run immediately across the automation's full repository
 selection. For scheduled automations, this does not affect the next scheduled run time. Manual
-triggers follow the same concurrency rules as all other runs: if the automation is already at its
-**Concurrent runs** bound, the trigger is rejected. Trigger Now also works while the automation is
-paused, so you can verify a fix before resuming.
+triggers follow the same concurrency rules as all other runs: the trigger is rejected when active
+firings have reached the automation's [concurrent runs](#concurrent-runs) limit. Trigger Now also
+works while the automation is paused, so you can verify a fix before resuming.
 
 Manual runs use the requester's authority and identity, not the stored executor's; pull requests the
 run's own prompt opens are created by the GitHub App. In addition to trigger permission, the
@@ -636,26 +636,19 @@ Automations display one of three statuses:
 
 ## Concurrent Runs
 
-For scheduled and manual triggers, an automation admits up to **Concurrent runs** firings at once —
-a per-automation setting on the edit form, defaulting to **1**. At the default, a trigger that fires
-while a previous run is still in progress is recorded as **Skipped** with reason "concurrent run
-active"; raise it and the schedule keeps starting runs until that many are in flight, skipping only
-past the bound.
+For scheduled and manual triggers, an automation runs one firing at a time by default. A recurring
+schedule automation can raise **Concurrent runs** (`maxConcurrentRuns`, 1–10, default 1) to let up
+to that many firings be in progress at once — for example, a queue-draining automation whose runs
+outlast its cron interval. The limit counts firings, not sessions: a firing that fans out over
+several repositories holds one slot. A run waiting to retry still holds its slot.
 
-Raise it only for an automation whose runs cannot tread on each other's work. Two runs of the same
-automation share nothing except whatever their instructions reach — a queue, a branch, an issue
-tracker — so an automation that picks "the next item" needs its instructions to claim that item
-before two runs can safely pick at the same time.
-
-The bound counts **firings**, not sessions. A multi-repository automation launches one session per
-repository within a single firing (see [Repository Context](#repository-context)), and those never
-count against each other.
-
-Concurrency builds up one interval at a time rather than all at once: a tick starts at most one
-firing per automation, because the firing advances the schedule past the slot it claimed. So at a
-bound of 3 on a `*/15` schedule, the three runs start fifteen minutes apart, not together.
-
-Lowering the setting never interrupts firings already in flight; it applies from the next one.
+When a scheduled firing comes due at the limit, it is recorded as **Skipped** with reason
+`concurrent_run_active` and the schedule advances; **Trigger Now** at the limit is rejected with
+`409` and records nothing. The tick starts at most one firing per automation, so concurrency builds
+up one cron interval at a time rather than as a burst. Lowering the limit never stops runs already
+in progress; it only refuses new firings until enough of them finish. Event-driven and one-shot
+automations stay at 1; `maxConcurrentRuns` above 1 is rejected for anything but a recurring
+schedule.
 
 Event-driven automations use concurrency keys instead. For inbound webhooks, retries with the same
 `idempotencyKey` are treated as the same event, but separate deliveries without a shared
@@ -674,10 +667,7 @@ This prevents overlapping sessions from interfering with each other on the same 
 ## Auto-Pause
 
 If an automation fails **5 consecutive times**, it is automatically paused to prevent runaway
-failures. The threshold allows for concurrency: at a **Concurrent runs** setting above one, a single
-shared cause can fail every firing in flight at once, and those strikes land in a row with no
-success between them to reset the counter. The status changes to **Paused** and no further runs will
-start until you resume it.
+failures. The status changes to **Paused** and no further runs will start until you resume it.
 
 To re-enable the automation, click **Resume**. This resets the failure counter. Scheduled
 automations also compute their next run at that point.
@@ -703,7 +693,7 @@ auto-pause threshold.
 | Repositories per automation            | 10 (multi-select on schedule triggers) |
 | Minimum schedule interval              | 15 minutes                             |
 | Webhook payload size                   | 64 KB                                  |
-| Concurrent runs per automation         | 1-10, default 1 (scheduled/manual)     |
+| Concurrent runs per automation         | 1 by default, up to 10 (schedule only) |
 | Consecutive failures before auto-pause | 5                                      |
 | Launch retries per scheduled run       | 5                                      |
 | Run execution timeout                  | 90 minutes                             |

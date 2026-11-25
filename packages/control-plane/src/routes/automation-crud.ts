@@ -105,6 +105,20 @@ const logger = createLogger("router:automations");
 /** Launch retries belong to scheduled firings; zero is accepted for all trigger types. */
 const MAX_RETRIES_SCHEDULE_ONLY_ERROR = "maxRetries above 0 is only valid for schedule triggers";
 
+/**
+ * Concurrent firings belong to recurring schedules; the default is accepted for every automation.
+ * A one-shot fires once, and an event automation's events are bounded per concurrency key instead,
+ * so raising the bound there would only let manual firings overlap.
+ */
+const MAX_CONCURRENT_RUNS_RECURRING_ONLY_ERROR =
+  "maxConcurrentRuns above 1 is only valid for recurring schedule triggers";
+
+function exceedsSerializedConcurrency(maxConcurrentRuns: number | undefined): boolean {
+  return (
+    maxConcurrentRuns !== undefined && maxConcurrentRuns > DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS
+  );
+}
+
 async function handleCreateAutomation(
   request: Request,
   env: Env,
@@ -216,6 +230,12 @@ async function handleCreateAutomation(
   const isSchedule = triggerType === "schedule";
 
   if (body.maxRetries && !isSchedule) return error(MAX_RETRIES_SCHEDULE_ONLY_ERROR, 400);
+  if (
+    exceedsSerializedConcurrency(body.maxConcurrentRuns) &&
+    (!isSchedule || body.scheduleOnceAt !== undefined)
+  ) {
+    return error(MAX_CONCURRENT_RUNS_RECURRING_ONLY_ERROR, 400);
+  }
 
   // Schedule-specific validation
   if (isSchedule) {
@@ -387,13 +407,11 @@ async function handleCreateAutomation(
     model,
     reasoning_effort: reasoningEffort,
     enabled: 1,
-    // Governs schedule firings and, for every trigger type, Trigger Now — an
-    // event firing is bounded by its own concurrency key instead.
-    max_concurrent_runs: body.maxConcurrentRuns ?? DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     next_run_at: nextRunAt,
     consecutive_failures: 0,
     max_retries: body.maxRetries ?? 0,
     sandbox_timeout_ms: body.sandboxTimeoutMs ?? null,
+    max_concurrent_runs: body.maxConcurrentRuns ?? DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     created_by: enforced.participantUserId,
     user_id: resolvedUserId,
     created_at: now,
@@ -514,6 +532,12 @@ async function handleUpdateAutomation(
   }
   if (body.maxRetries && existingTriggerType !== "schedule") {
     return error(MAX_RETRIES_SCHEDULE_ONLY_ERROR, 400);
+  }
+  if (
+    exceedsSerializedConcurrency(body.maxConcurrentRuns) &&
+    (existingTriggerType !== "schedule" || existing.schedule_once_at != null)
+  ) {
+    return error(MAX_CONCURRENT_RUNS_RECURRING_ONLY_ERROR, 400);
   }
 
   let replacementProviderSelections: ModelProviderSelections | null = null;
@@ -658,21 +682,19 @@ async function handleUpdateAutomation(
   }
   if (body.scheduleTz !== undefined) updateFields.schedule_tz = body.scheduleTz;
   if (body.maxRetries !== undefined) updateFields.max_retries = body.maxRetries;
+  // Runs already launched keep the budget their session was created with; null
+  // clears the override back to inheriting.
+  if (body.sandboxTimeoutMs !== undefined) {
+    updateFields.sandbox_timeout_ms = body.sandboxTimeoutMs;
+  }
+  if (body.maxConcurrentRuns !== undefined) {
+    updateFields.max_concurrent_runs = body.maxConcurrentRuns;
+  }
   if (body.harness !== undefined) updateFields.harness = nextHarness;
   if (body.model !== undefined) updateFields.model = nextModel;
   // A harness switch can invalidate the stored effort just like a model change.
   if (body.reasoningEffort !== undefined || body.model !== undefined || harnessChanged) {
     updateFields.reasoning_effort = resolvedReasoningEffort;
-  }
-  // Lowering it never touches firings already in flight — they hold their own
-  // children and finish; the new bound applies from the next admission.
-  if (body.maxConcurrentRuns !== undefined) {
-    updateFields.max_concurrent_runs = body.maxConcurrentRuns;
-  }
-  // Runs already launched keep the budget their session was created with; null
-  // clears the override back to inheriting.
-  if (body.sandboxTimeoutMs !== undefined) {
-    updateFields.sandbox_timeout_ms = body.sandboxTimeoutMs;
   }
 
   // Repository-set edits are UNCONDITIONAL — no cardinality freeze and no

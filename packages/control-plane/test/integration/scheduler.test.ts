@@ -3,10 +3,7 @@ import { env } from "cloudflare:test";
 import { seedActiveUser, sqlDatabase } from "./helpers";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { GitHubAutomationStore } from "../../src/db/github-automation-store";
-import {
-  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
-  type AutomationRunStatus,
-} from "@open-inspect/shared/types/automations";
+import type { AutomationRunStatus } from "@open-inspect/shared/types/automations";
 import type { GitHubAutomationEvent } from "@open-inspect/shared/triggers";
 import { cleanD1Tables } from "./cleanup";
 import { seedTeam } from "./ownership-test-helpers";
@@ -44,7 +41,6 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
     model: "anthropic/claude-sonnet-4-6",
     reasoning_effort: null,
     enabled: 1,
-    max_concurrent_runs: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     next_run_at: now + 86400000,
     consecutive_failures: 0,
     created_by: "user-1",
@@ -534,7 +530,7 @@ describe("Scheduler (integration)", () => {
         makeAutomation({ id: "auto-conc-below", next_run_at: now - 60_000, max_concurrent_runs: 3 })
       );
 
-      // Two firings in flight, each its own invocation — one short of the bound.
+      // Two firings in flight, each its own invocation: one short of the bound.
       for (const suffix of ["a", "b"]) {
         await seedRun(
           makeRunRow("auto-conc-below", {
@@ -550,13 +546,9 @@ describe("Scheduler (integration)", () => {
 
       await createScheduler().tick();
 
-      // The third firing is admitted: a new invocation with a child of its own,
-      // on top of the two that were already active.
       const runs = await fetchRuns("auto-conc-below");
       expect(runs).toHaveLength(3);
-      const invocationIds = new Set(runs.map((run) => run.invocation_id));
-      expect(invocationIds.size).toBe(3);
-
+      expect(new Set(runs.map((run) => run.invocation_id)).size).toBe(3);
       const { invocations } = await store.listInvocations("auto-conc-below", {
         limit: 10,
         offset: 0,
@@ -586,17 +578,15 @@ describe("Scheduler (integration)", () => {
 
       await createScheduler().tick();
 
-      // No fourth run, and the firing is recorded as a childless skip whose
-      // schedule still advances — the same disposition the limit-1 guard gives.
+      // No fourth run: the firing is a childless skip whose schedule still
+      // advances, the same disposition a serialized automation gets.
       expect(await fetchRuns("auto-conc-at")).toHaveLength(3);
       const { invocations } = await store.listInvocations("auto-conc-at", { limit: 10, offset: 0 });
       const skipped = invocations.filter((invocation) => invocation.status === "skipped");
       expect(skipped).toHaveLength(1);
       expect(skipped[0]!.skipReason).toBe("concurrent_run_active");
       expect(skipped[0]!.runs).toHaveLength(0);
-
-      const advanced = await store.getById("auto-conc-at");
-      expect(advanced!.next_run_at!).toBeGreaterThan(now);
+      expect((await store.getById("auto-conc-at"))!.next_run_at!).toBeGreaterThan(now);
     });
 
     it("starts at most one firing per tick however much headroom the limit leaves", async () => {
@@ -610,23 +600,16 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      // Nothing in flight and four slots of headroom — the tick still fires the
-      // automation once, because it advances next_run_at past the slot it just
-      // claimed. Concurrency therefore accrues one cron interval at a time
-      // rather than as a burst, which is what keeps two runs of one automation
-      // from racing out of the gate on the same tick.
+      // The tick advances next_run_at past the slot it claimed, so concurrency
+      // builds one cron interval at a time rather than as a burst.
       await createScheduler().tick();
       expect(await fetchRuns("auto-conc-onepertick")).toHaveLength(1);
-
-      // A second tick in the same moment finds the schedule already advanced.
       await createScheduler().tick();
       expect(await fetchRuns("auto-conc-onepertick")).toHaveLength(1);
-
-      const automation = await store.getById("auto-conc-onepertick");
-      expect(automation!.next_run_at!).toBeGreaterThan(now);
+      expect((await store.getById("auto-conc-onepertick"))!.next_run_at!).toBeGreaterThan(now);
     });
 
-    it("bounds invocations rather than runs, so one fan-out firing cannot exhaust the limit", async () => {
+    it("bounds firings rather than runs, so one fan-out firing cannot exhaust the limit", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(
@@ -637,9 +620,7 @@ describe("Scheduler (integration)", () => {
         })
       );
 
-      // One firing that fanned out over three targets. Counting rows would read
-      // this as three in flight and refuse the next firing; counting firings
-      // reads it as one.
+      // One firing that fanned out over three targets holds one slot.
       for (const suffix of ["a", "b", "c"]) {
         await seedRun(
           makeRunRow("auto-conc-fanout", {
@@ -854,7 +835,9 @@ describe("Scheduler (integration)", () => {
       for (const blocked of blockedTriggers) {
         expect(blocked).toMatchObject({
           status: "rejected",
-          reason: expect.objectContaining({ message: "An active run already exists" }),
+          reason: expect.objectContaining({
+            message: "The automation is at its concurrent run limit",
+          }),
         });
       }
 
@@ -951,8 +934,46 @@ describe("Scheduler (integration)", () => {
       );
 
       await expect(createScheduler().trigger("auto-trig1", asPerson("user-1"))).rejects.toThrow(
-        "An active run already exists"
+        "The automation is at its concurrent run limit"
       );
+    });
+
+    it("rejects a manual trigger only once the automation is at its concurrency limit", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-trig-bound", max_concurrent_runs: 2 }));
+      await seedRun(
+        makeRunRow("auto-trig-bound", {
+          id: "run-trig-bound-a",
+          status: "running",
+          session_id: "sess-trig-bound-a",
+          started_at: now,
+        })
+      );
+
+      const sessionFetch = vi.fn(async (input: RequestInfo | URL) => {
+        const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+        if (path === "/internal/init") return Response.json({ status: "ok" });
+        if (path === "/internal/prompt") {
+          return Response.json({ messageId: "msg-trig-bound", status: "queued" });
+        }
+        return new Response("Not Found", { status: 404 });
+      });
+      const schedulerEnv = createCloudflareEnv({
+        ...env,
+        SESSION: {
+          idFromName: vi.fn((name: string) => name),
+          get: vi.fn(() => ({ fetch: sessionFetch })),
+        } as unknown as DurableObjectNamespace,
+      });
+
+      await createScheduler(schedulerEnv).trigger("auto-trig-bound", asPerson("user-1"));
+      expect(await fetchRuns("auto-trig-bound")).toHaveLength(2);
+
+      await expect(
+        createScheduler(schedulerEnv).trigger("auto-trig-bound", asPerson("user-1"))
+      ).rejects.toThrow("The automation is at its concurrent run limit");
+      expect(await fetchRuns("auto-trig-bound")).toHaveLength(2);
     });
 
     it("requires the requester to have session execution authority", async () => {

@@ -22,8 +22,8 @@ import type {
   AutomationRunStatus,
 } from "@open-inspect/shared/types/automations";
 import {
-  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   automationInvocationStatusSchema,
+  DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
 } from "@open-inspect/shared/types/automations";
 import {
   automationTriggerTypeSchema,
@@ -90,8 +90,6 @@ export interface AutomationRow {
   model: string;
   reasoning_effort: string | null;
   enabled: number; // SQLite integer boolean
-  /** Firings allowed in flight at once; one serializes (the pre-0094 behaviour). */
-  max_concurrent_runs: number;
   next_run_at: number | null;
   consecutive_failures: number;
   /**
@@ -104,6 +102,11 @@ export interface AutomationRow {
    * built for insert may omit it.
    */
   sandbox_timeout_ms?: number | null;
+  /**
+   * Schedule and manual firings allowed in flight at once, counted per invocation. Optional so
+   * rows built for insert may omit it; the column defaults to DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS.
+   */
+  max_concurrent_runs?: number;
   created_by: string;
   user_id: string | null;
   owner_team_id: string | null;
@@ -332,10 +335,8 @@ const countRowSchema = z.object({ count: z.number() });
 
 /**
  * Overlap scope for a new invocation: schedule/manual firings block once the
- * automation already holds `max_concurrent_runs` invocations in flight; event
- * firings block per concurrency key. The bound is not carried here — the
- * predicate reads it from the automation row in the same statement, so a
- * concurrent PATCH cannot be overtaken by a firing holding a stale snapshot.
+ * automation holds `max_concurrent_runs` invocations with an active run; event
+ * firings block per concurrency key.
  */
 export type InvocationOverlapScope =
   { kind: "automation" } | { kind: "concurrencyKey"; concurrencyKey: string };
@@ -396,11 +397,11 @@ export function toAutomation(
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     enabled: row.enabled === 1,
-    maxConcurrentRuns: row.max_concurrent_runs,
     nextRunAt: row.next_run_at,
     consecutiveFailures: row.consecutive_failures,
     maxRetries: row.max_retries ?? 0,
     sandboxTimeoutMs: row.sandbox_timeout_ms ?? null,
+    maxConcurrentRuns: row.max_concurrent_runs ?? DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
     createdBy: row.created_by,
     userId: row.user_id,
     ownerTeamId: row.owner_team_id,
@@ -554,11 +555,10 @@ export class AutomationStore {
       .prepare(
         `INSERT INTO automations
          (id, name, instructions,
-          trigger_type, schedule_cron, schedule_tz, harness, model, reasoning_effort, enabled,
-          max_concurrent_runs, next_run_at,
+          trigger_type, schedule_cron, schedule_tz, harness, model, reasoning_effort, enabled, next_run_at,
           consecutive_failures, created_by, user_id, created_at, updated_at, deleted_at,
            event_type, trigger_config, trigger_auth_data, owner_team_id, schedule_once_at, max_retries,
-           sandbox_timeout_ms)
+           sandbox_timeout_ms, max_concurrent_runs)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
@@ -572,7 +572,6 @@ export class AutomationStore {
         row.model,
         row.reasoning_effort,
         row.enabled,
-        row.max_concurrent_runs,
         row.next_run_at,
         row.consecutive_failures,
         row.created_by,
@@ -586,7 +585,8 @@ export class AutomationStore {
         row.owner_team_id,
         row.schedule_once_at,
         row.max_retries ?? 0,
-        row.sandbox_timeout_ms ?? null
+        row.sandbox_timeout_ms ?? null,
+        row.max_concurrent_runs ?? DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS
       );
   }
 
@@ -808,10 +808,10 @@ export class AutomationStore {
       "reasoning_effort",
       "next_run_at",
       "enabled",
-      "max_concurrent_runs",
       "consecutive_failures",
       "max_retries",
       "sandbox_timeout_ms",
+      "max_concurrent_runs",
       "event_type",
       "trigger_config",
       "trigger_auth_data",
@@ -1455,32 +1455,23 @@ export class AutomationStore {
   /**
    * Per-source overlap predicate, used both as the cheap pre-check and inside
    * the conditional insert (same SQL, one definition). It matches the firings
-   * that must be BLOCKED, so the insert reads `WHERE NOT EXISTS (…)`.
+   * that must be blocked, so the insert reads `WHERE NOT EXISTS (…)`.
    *
    * Schedule/manual firings block once the automation already holds
-   * `max_concurrent_runs` invocations in flight, counting one whose run waits to
-   * retry (main parity with getActiveRunForAutomation); event firings block per
-   * concurrency key only — an automation-wide guard would serialize unrelated
-   * events.
+   * `max_concurrent_runs` invocations with an active run, counting one waiting
+   * to retry; event firings block per concurrency key only — an
+   * automation-wide guard would serialize unrelated events.
    *
-   * The schedule/manual arm counts DISTINCT invocations rather than rows. A
-   * fan-out automation posts one run per target, so counting rows would refuse
-   * a ten-repository automation's second firing at a limit of three while
-   * nothing overlapping had happened — the limit is about firings in flight,
-   * and the tick's own child-launch budget is what paces their sessions.
+   * The schedule/manual arm counts DISTINCT invocations rather than runs: a
+   * fan-out firing posts one run per target, and counting rows would let one
+   * firing over many repositories exhaust the bound on its own.
    *
-   * It also reads the bound from `automations` inside this same statement
-   * rather than taking it as a parameter. A firing resolves repositories,
-   * authorization and provider auth between reading the automation row and
-   * reaching this insert, and a PATCH that lowers the bound during that window
-   * would otherwise be overtaken by a firing still comparing against the old
-   * value — admitting work past a limit the operator had already lowered.
-   * Reading it here lets the database order the two.
-   *
-   * The inner filter and the COALESCE are the SQL twin of
-   * automationConcurrencyLimit: a row carrying zero, a negative, or NULL — and
-   * an automation deleted mid-firing — all read as
-   * DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS rather than as no bound at all.
+   * The bound is read from `automations` inside this statement rather than
+   * bound as a parameter. A firing resolves repositories, authorization, and
+   * provider auth between reading the automation and reaching the insert; a
+   * PATCH lowering the bound in that window must not be overtaken by a firing
+   * still holding the old value. A deleted row reads as the default bound. The
+   * count is served by idx_runs_active_lookup.
    */
   private overlapPredicate(
     automationId: string,
@@ -1501,12 +1492,25 @@ export class AutomationStore {
               SELECT COUNT(DISTINCT ar.invocation_id) FROM automation_runs ar
               WHERE ar.automation_id = ? AND ar.status IN ${ACTIVE_RUN_STATUSES_SQL}
             ) >= COALESCE(
-              (SELECT a.max_concurrent_runs FROM automations a
-               WHERE a.id = ? AND a.max_concurrent_runs >= 1),
+              (SELECT a.max_concurrent_runs FROM automations a WHERE a.id = ?),
               ${DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS}
             )`,
       params: [automationId, automationId],
     };
+  }
+
+  /**
+   * Whether the automation already holds `max_concurrent_runs` firings in
+   * flight: the schedule/manual pre-check, evaluated from the same predicate
+   * the conditional insert applies.
+   */
+  async isAtConcurrencyLimit(automationId: string): Promise<boolean> {
+    const overlap = this.overlapPredicate(automationId, { kind: "automation" });
+    const row = await this.db
+      .prepare(`SELECT EXISTS (${overlap.sql}) AS blocked`)
+      .bind(...overlap.params)
+      .first<{ blocked: number }>();
+    return row?.blocked === 1;
   }
 
   private scheduledInvocationGuard(invocation: AutomationInvocationRow): {
@@ -1519,23 +1523,6 @@ export class AutomationStore {
         AND (a.schedule_once_at IS NULL OR (a.enabled = 1 AND a.next_run_at = ? AND a.schedule_once_at = a.next_run_at)))`,
       params: [invocation.automation_id, invocation.scheduled_at],
     };
-  }
-
-  /**
-   * Invocations of this automation with at least one active run — the cheap
-   * pre-check twin of the schedule/manual overlap predicate above. Counted the
-   * same way (DISTINCT invocation_id) so the two cannot disagree about what a
-   * firing in flight is.
-   */
-  async countActiveInvocations(automationId: string): Promise<number> {
-    const row = await this.db
-      .prepare(
-        `SELECT COUNT(DISTINCT ar.invocation_id) AS count FROM automation_runs ar
-         WHERE ar.automation_id = ? AND ar.status IN ${ACTIVE_RUN_STATUSES_SQL}`
-      )
-      .bind(automationId)
-      .first<{ count: number }>();
-    return row?.count ?? 0;
   }
 
   /**

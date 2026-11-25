@@ -20,7 +20,6 @@ import type {
   ListAutomationInvocationsResponse,
   ListAutomationsResponse,
 } from "@open-inspect/shared";
-import { DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS } from "@open-inspect/shared/types/automations";
 import AutomationDetailPage from "@/app/(app)/(sidebar)/automations/[id]/page";
 import { useAutomation, useAutomationInvocations, useAutomations } from "@/hooks/use-automations";
 import { useAutomationActions } from "@/hooks/use-automation-actions";
@@ -60,11 +59,11 @@ const original: AutomationListItem = {
   model: "openai/gpt-5.4",
   reasoningEffort: null,
   enabled: true,
-  maxConcurrentRuns: DEFAULT_AUTOMATION_MAX_CONCURRENT_RUNS,
   nextRunAt: null,
   consecutiveFailures: 0,
   maxRetries: 0,
   sandboxTimeoutMs: null,
+  maxConcurrentRuns: 1,
   createdBy: "user-1",
   userId: null,
   ownerTeamId: "team-1",
@@ -390,7 +389,7 @@ describe("automation cache invalidation", () => {
       );
     });
     await screen.findByRole("heading", { name: "Original" });
-    await screen.findByText("Skipped because a previous run is still active");
+    await screen.findByText("Skipped because the concurrent run limit was reached");
     fireEvent.click(screen.getByRole("button", { name: "Trigger Now" }));
     await waitFor(() => {
       expect(cache.get(detailKey)?.error).toBe(failure);
@@ -399,7 +398,9 @@ describe("automation cache invalidation", () => {
     expect(cache.get(detailKey)?.data).toEqual(loadedDetail);
     expect(cache.get(historyKey)?.data).toEqual(loadedHistory);
     expect(screen.getByRole("heading", { name: "Original" })).toBeInTheDocument();
-    expect(screen.getByText("Skipped because a previous run is still active")).toBeInTheDocument();
+    expect(
+      screen.getByText("Skipped because the concurrent run limit was reached")
+    ).toBeInTheDocument();
     expect(screen.queryByText("Automation not found.")).not.toBeInTheDocument();
   });
 });
