@@ -39,7 +39,8 @@ async function createReviewSession(): Promise<string> {
       model: "anthropic/claude-haiku-4-5",
       repoOwner: "acme",
       repoName: "web-app",
-      githubReview: true,
+      // The fork's sessions take a generation-claim object here (its own supersession), which
+      // would also claim the PR; upstream's route needs no review marker on the session.
     }),
   });
   expect(created.status).toBe(201);

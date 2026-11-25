@@ -318,13 +318,13 @@ describe("Scheduler (integration)", () => {
       expect(automation!.consecutive_failures).toBe(1);
     });
 
-    it("auto-pauses after 3 consecutive failures", async () => {
+    it("auto-pauses after 5 consecutive failures", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(
         makeAutomation({
           id: "auto-rc3",
-          consecutive_failures: 2,
+          consecutive_failures: 4,
           enabled: 1,
           next_run_at: now + 86400000,
         })
@@ -345,12 +345,12 @@ describe("Scheduler (integration)", () => {
         sessionId: "sess-3",
         messageId: "msg-3",
         success: false,
-        error: "Third consecutive failure",
+        error: "Fifth consecutive failure",
       });
       expect(result).toBeUndefined();
 
       const automation = await store.getById("auto-rc3");
-      expect(automation!.consecutive_failures).toBe(3);
+      expect(automation!.consecutive_failures).toBe(5);
       expect(automation!.enabled).toBe(0);
       expect(automation!.next_run_at).toBeNull();
     });
@@ -705,7 +705,7 @@ describe("Scheduler (integration)", () => {
       expect(secondInvocations.invocations).toHaveLength(1);
     });
 
-    it("auto-pauses after recovery sweep detects 3rd consecutive failure", async () => {
+    it("auto-pauses after recovery sweep detects 5th consecutive failure", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(
@@ -713,7 +713,7 @@ describe("Scheduler (integration)", () => {
           id: "auto-t5",
           next_run_at: now + 86400000,
           enabled: 1,
-          consecutive_failures: 2,
+          consecutive_failures: 4,
         })
       );
 
@@ -730,7 +730,7 @@ describe("Scheduler (integration)", () => {
       await createScheduler().tick();
 
       const automation = await store.getById("auto-t5");
-      expect(automation!.consecutive_failures).toBe(3);
+      expect(automation!.consecutive_failures).toBe(5);
       expect(automation!.enabled).toBe(0);
       expect(automation!.next_run_at).toBeNull();
     });
@@ -1249,7 +1249,7 @@ describe("Scheduler (integration)", () => {
           makeAutomation({
             id: automationId,
             owner_team_id: "team-neutral-recovery",
-            consecutive_failures: 2,
+            consecutive_failures: 4,
           })
         );
       });
@@ -1324,7 +1324,7 @@ describe("Scheduler (integration)", () => {
         expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 0, failed: 0 });
         expect(await store.getById(automationId)).toMatchObject({
           enabled: 1,
-          consecutive_failures: 2,
+          consecutive_failures: 4,
         });
       });
 
@@ -1379,7 +1379,7 @@ describe("Scheduler (integration)", () => {
           ]);
           expect(await createScheduler().tick()).toEqual({ processed: 0, skipped: 0, failed: 0 });
           expect(await store.getById(automationId)).toMatchObject({
-            consecutive_failures: status === "failed" ? 3 : 2,
+            consecutive_failures: status === "failed" ? 5 : 4,
             enabled: status === "failed" ? 0 : 1,
           });
           expect(await store.getRunById(automationId, barrier.id)).toMatchObject({ status });
