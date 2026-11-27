@@ -50,11 +50,11 @@ describe("route policy table", () => {
   });
 
   it("publishes the complete canonical route catalog", () => {
-    expect(routes).toHaveLength(271);
+    expect(routes).toHaveLength(274);
 
     const paths = routes.map((route) => route.path);
-    expect(new Set(paths).size).toBe(209);
-    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(271);
+    expect(new Set(paths).size).toBe(210);
+    expect(new Set(routes.map((route) => `${route.method}:${route.path}`)).size).toBe(274);
     expect(routeFor("POST", "/sessions/session-1/sandbox-bootstrap")).toMatchObject({
       authentication: { kind: "handler-authenticated" },
       supportedScmProviders: "all",
@@ -64,6 +64,20 @@ describe("route policy table", () => {
       supportedScmProviders: "all",
       cacheControl: "private, no-store",
     });
+  });
+
+  it("serves the hosted MCP server as a route that grants nothing itself", () => {
+    // Each tool call is admitted by the route it reaches; /mcp authenticates in its handler only
+    // to refuse a dead token early, and must never accept a principal for a route of its own.
+    for (const method of ["POST", "GET", "DELETE"] as const) {
+      expect(routeFor(method, "/mcp")).toMatchObject({
+        authentication: { kind: "handler-authenticated" },
+        authorization: { kind: "none" },
+        supportedScmProviders: "all",
+        cacheControl: "no-store",
+      });
+      expect(routeFor(method, "/mcp")).not.toHaveProperty("personalAccessTokens");
+    }
   });
 
   it("requires an audited human settings writer to revoke personal MCP connections", () => {
